@@ -1,78 +1,67 @@
 import cv2
 import numpy as np
-import time
 
-# Load the pre-trained MobileNet SSD model
-net = cv2.dnn.readNetFromCaffe("MobileNetSSD_deploy.prototxt.txt", "MobileNetSSD_deploy.caffemodel")
+# Load YOLO
+net = cv2.dnn.readNet("yolov4-tiny.weights", "yolov4-tiny.cfg")
+layer_names = net.getLayerNames()
+output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
 
-# Set up the camera
-camera = cv2.VideoCapture(0)  # Assumes the camera is connected to the first port (0)
+# Initialize video capture
+cap = cv2.VideoCapture(0)
 
-# Initialize variables
-people_count = 0
-people_inside = 0
-previous_detections = []
+# Define the virtual line
+line_position = 300
+line_color = (255, 0, 0)  # Blue
+line_thickness = 2
 
-# Define the virtual fence coordinates (door area)
-door_coordinates = [(200, 100), (400, 400)]  # Adjust coordinates according to your camera view
+# Counters
+people_counter = 0
+memory = {}
 
 while True:
-    # Read a frame from the camera
-    ret, frame = camera.read()
-    
-    # Preprocess the frame
-    blob = cv2.dnn.blobFromImage(frame, 0.007843, (300, 300), (127.5, 127.5, 127.5), False)
-    
-    # Perform object detection
-    net.setInput(blob)
-    detections = net.forward()
-    
-    # Process the detections
-    current_detections = []
-    for i in range(detections.shape[2]):
-        confidence = detections[0, 0, i, 2]
-        if confidence > 0.5:
-            class_id = int(detections[0, 0, i, 1])
-            if class_id == 15:  # Class ID 15 represents 'person'
-                x1 = int(detections[0, 0, i, 3] * frame.shape[1])
-                y1 = int(detections[0, 0, i, 4] * frame.shape[0])
-                x2 = int(detections[0, 0, i, 5] * frame.shape[1])
-                y2 = int(detections[0, 0, i, 6] * frame.shape[0])
-                current_detections.append((x1, y1, x2, y2))
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    
-    # Update people count based on detections crossing the virtual fence
-    for detection in current_detections:
-        x1, y1, x2, y2 = detection
-        center_x = (x1 + x2) // 2
-        center_y = (y1 + y2) // 2
-        if door_coordinates[0][0] < center_x < door_coordinates[1][0] and \
-           door_coordinates[0][1] < center_y < door_coordinates[1][1]:
-            if detection not in previous_detections:
-                # Person entered the room
-                people_count += 1
-                people_inside += 1
-    
-    for detection in previous_detections:
-        if detection not in current_detections:
-            # Person left the room
-            people_count -= 1
-            people_inside = max(0, people_inside - 1)
-    
-    previous_detections = current_detections
-    
-    # Display the frame with bounding boxes, people count, and people inside
-    cv2.putText(frame, f"People Count: {people_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-    cv2.putText(frame, f"People Inside: {people_inside}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-    cv2.imshow("Frame", frame)
-    
-    # Break the loop if 'q' is pressed
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-    
-    # Delay to control the processing frame rate (optional)
-    time.sleep(0.1)
+    _, frame = cap.read()
+    height, width, _ = frame.shape
 
-# Release the camera and close windows
-camera.release()
+    # Detecting objects
+    blob = cv2.dnn.blobFromImage(frame, 0.00392, (416, 416), (0, 0, 0), True, crop=False)
+    net.setInput(blob)
+    outs = net.forward(output_layers)
+
+    boxes = []
+    confidences = []
+    class_ids = []
+    
+    # Processing detections
+    for out in outs:
+        for detection in out:
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+            if confidence > 0.5 and class_id == 0:  # Filter based on confidence and class_id for 'person'
+                # Object detected
+                center_x = int(detection[0] * width)
+                center_y = int(detection[1] * height)
+                w = int(detection[2] * width)
+                h = int(detection[3] * height)
+
+                # Rectangle coordinates
+                x = int(center_x - w / 2)
+                y = int(center_y - h / 2)
+
+                boxes.append([x, y, w, h])
+                confidences.append(float(confidence))
+                
+                # Draw a bounding box and line
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    
+    cv2.line(frame, (line_position, 0), (line_position, height), line_color, line_thickness)
+
+    # Display the resulting frame
+    cv2.imshow("Frame", frame)
+
+    key = cv2.waitKey(1)
+    if key == ord('q'):
+        break
+
+cap.release()
 cv2.destroyAllWindows()
