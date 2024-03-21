@@ -6,10 +6,10 @@ from tracker.centroidtracker import CentroidTracker
 from tracker.trackableobject import TrackableObject
 from imutils.video import FPS
 import numpy as np
-import dlib
 import logging
 import time
 import threading
+from deep_sort_realtime.deepsort_tracker import DeepSort  # Importing DeepSort
 
 
 # execution start time
@@ -19,13 +19,12 @@ start_time = time.time()
 logging.basicConfig(level = logging.INFO, format = "[INFO] %(message)s")
 logger = logging.getLogger(__name__)
 
-model = YOLO('yolov8x.pt')
+model = YOLO('yolov8n.pt')
 
 
 ## Input Video
-test_video = 'Input\input.mp4'
 logger.info("Starting the video..")
-cap = cv2.VideoCapture(test_video)
+cap = cv2.VideoCapture(1)
 
 ##for camera ip
 # camera_ip = "Camera Url"
@@ -69,133 +68,54 @@ def get_person_coordinates(frame):
 
 
 def people_counter():
-    """
-    Counts the number of people entering and exiting based on object tracking.
-    """
-    count = 0
+    logger.info("Starting the video..")
+    cap = cv2.VideoCapture(1)  # Assuming this is your desired video source
 
-    writer = None
-    ct = CentroidTracker(maxDisappeared=40, maxDistance=40)
-    trackers = []
-    trackableObjects = {}
-
-    # Initialize the total number of frames processed thus far, along
-    # with the total number of objects that have moved either up or down
-    totalFrames = 0
-    totalDown = 0
-    totalUp = 0
-
-    # Initialize empty lists to store the counting data
-    total = []
-    move_out = []
-    move_in = []
-
-    # Initialize video writer
-    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter('Final_output.mp4', fourcc, 30, (W, H), True)
+    # Initialize Deep SORT tracker
+    tracker = DeepSort(max_age=30, nn_budget=70, override_track_class=None)
 
     fps = FPS().start()
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        count += 1
-        if count % 3 != 0:
-            continue
 
-        frame = cv2.resize(frame, (500, 280))
+        # Resize frame for consistent processing speed
+        frame = cv2.resize(frame, (640, 360))
 
-        per_corr = get_person_coordinates(frame)
+        # Detect people using YOLO model
+        detections = get_person_coordinates(frame)  # Get detections as before
 
-        rects = []
-        if totalFrames % 30 == 0:
-            trackers = []
-            for bbox in per_corr:
-                x1, y1, x2, y2 = bbox
-                rects.append([x1, y1, x2, y2])
-                tracker = dlib.correlation_tracker()
-                rect = dlib.rectangle(int(x1), int(y1), int(x2), int(y2))
-                tracker.start_track(frame, rect)
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 255), 1)
-                trackers.append(tracker)
-        else:
-            for tracker in trackers:
-                tracker.update(frame)
-                pos = tracker.get_position()
-                startX = int(pos.left())
-                startY = int(pos.top())
-                endX = int(pos.right())
-                endY = int(pos.bottom())
-                rects.append((startX, startY, endX, endY))
-
-        cv2.line(frame, (0, H // 2 - 10), (W, H // 2 - 10), (0, 0, 0), 2)
-
-        objects = ct.update(rects)
-
-        for (objectID, centroid) in objects.items():
-            to = trackableObjects.get(objectID)
-
-            if to is None:
-                to = TrackableObject(objectID, centroid)
-            else:
-                y = [c[1] for c in to.centroids]
-                direction = centroid[1] - np.mean(y)
-                to.centroids.append(centroid)
-
-                if not to.counted:
-                    if direction < 0 and centroid[1] < H // 2 - 20:
-                        totalUp += 1
-                        move_out.append(totalUp)
-                        to.counted = True
-                    elif 0 < direction < 1.1 and centroid[1] > 144:
-                        totalDown += 1
-                        move_in.append(totalDown)
-                        to.counted = True
-
-                        total = []
-                        total.append(len(move_in) - len(move_out))
-
-            trackableObjects[objectID] = to
-
-            text = "ID {}".format(objectID)
-            cv2.putText(frame, text, (centroid[0] - 10, centroid[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        (255, 255, 255), 2)
-            cv2.circle(frame, (centroid[0], centroid[1]), 4, (255, 255, 255), -1)
-
-        info_status = [
-            ("Enter", totalUp),
-            ("Exit ", totalDown),
-        ]
-
-        # info_total = [("Total people inside", ', '.join(map(str, total)))]
+        # Format detections for Deep SORT (converting to Deep SORT expected format)
+        formatted_detections = [([det[0], det[1], det[2] - det[0], det[3] - det[1]], 1.0, 'person') for det in detections]
         
-        for (i, (k, v)) in enumerate(info_status):
-            text = "{}: {}".format(k, v)
-            cv2.putText(frame, text, (10, H - ((i * 20) + 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        # Update Deep SORT tracker with detections
+        tracks = tracker.update_tracks(formatted_detections, frame=frame)
+        
+        # Iterate over tracks and draw tracking info on frame
+        for track in tracks:
+            if not track.is_confirmed() or track.time_since_update > 1:
+                continue  # Skip unconfirmed or stale tracks
+            
+            bbox = track.to_ltrb()
+            track_id = track.track_id
+            cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), (255, 255, 255), 2)
+            cv2.putText(frame, f"ID {track_id}", (int(bbox[0]), int(bbox[1]-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255,255,255), 2)
 
-        writer.write(frame)
-        cv2.imshow("People Count", frame)
-
-        if cv2.waitKey(1) & 0xFF == 27:
+        # Display the frame
+        cv2.imshow("Frame", frame)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
             break
 
-        totalFrames += 1
         fps.update()
-
-        end_time = time.time()
-        num_seconds = (end_time - start_time)
-        if num_seconds > 28800:
-            break
-
-    cap.release()
-    writer.release()
-    cv2.destroyAllWindows()
 
     fps.stop()
     logger.info("Elapsed time: {:.2f}".format(fps.elapsed()))
     logger.info("Approx. FPS: {:.2f}".format(fps.fps()))
+
+    cap.release()
+    cv2.destroyAllWindows()
 
 
 
@@ -212,7 +132,3 @@ if __name__ == "__main__":
 
 # if __name__ == "__main__":
 #     start_people_counter()
-
-
-
-
