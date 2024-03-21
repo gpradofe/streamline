@@ -1,13 +1,13 @@
 import cv2
 import numpy as np
+print(cv2.__version__)
 
 # Load YOLO
 net = cv2.dnn.readNet("yolov4-tiny.weights", "yolov4-tiny.cfg")
 layer_names = net.getLayerNames()
-output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
+output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers().flatten()]
 
-# Initialize video capture
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 
 # Define the virtual line
 line_position = 300
