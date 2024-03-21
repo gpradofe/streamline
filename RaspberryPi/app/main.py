@@ -8,7 +8,8 @@ layer_names = net.getLayerNames()
 output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers().flatten()]
 
 cap = cv2.VideoCapture(1)
-
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 # Define the virtual line
 line_position = 300
 line_color = (255, 0, 0)  # Blue
